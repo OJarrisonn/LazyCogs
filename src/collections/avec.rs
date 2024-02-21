@@ -1,26 +1,26 @@
 use std::{mem, ops::{Index, IndexMut}};
 
-use crate::{lazy::LazyClone, lc::Lc};
+use crate::{lazy::LazyClone, alc::Alc};
 
 #[derive(Debug)]
-/// lazy-cogs implementation of a Vector. 
+/// lazy-cogs implementation of a Vector. Similar to Vector but thread-safe.
 /// It's a collection meant to be used when you need to work with the individual elements
 /// 
-/// Cloning a LazyVec is always O(1). Getting elements from it is also O(1)
+/// Cloning a AtomicLazyVec is always O(1). Getting elements from it is also O(1)
 /// 
 /// Modifing existing elements may take O(n) if the vector is a clone that is still modified, 
 /// or if it has living clones.
 /// 
 /// Pushing elements follow the same logic
-pub struct LazyVec<T: Clone> { 
-    vec: Lc<Vec<Lc<T>>>,
+pub struct AtomicLazyVec<T: Clone> { 
+    vec: Alc<Vec<Alc<T>>>,
 }
 
-impl<T: Clone> LazyVec<T> {
-    /// Creates a new empty LazyVec
+impl<T: Clone> AtomicLazyVec<T> {
+    /// Creates a new empty AtomicLazyVec
     pub fn new() -> Self {
         Self{
-            vec: Lc::new(Vec::new())
+            vec: Alc::new(Vec::new())
         }
     }
 
@@ -32,21 +32,25 @@ impl<T: Clone> LazyVec<T> {
     pub fn get(&self, index: usize) -> Option<&T> {
         let vec = self.vec.read();
         
-        vec.get(index).map(Lc::read)
+        vec.get(index).map(Alc::read)
     }
 
     /// Obtains a mutable reference to a specific value in the lazy vector
     /// 
     /// If the index is out of range it returns `None`
     /// 
-    /// This operation is **always** O(1)
+    /// This operation is protected, it means, that the other clones aren't affected
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         let vec = self.vec.read_mut();
         
-        vec.get_mut(index).map(Lc::read_mut)
+        vec.get_mut(index).map(Alc::read_mut)
     }
 
-    pub fn get_lazy(&self, index: usize) -> Option<Lc<T>> {
+    #[inline(always)]
+    /// Obtains an atomic lazy clone to a specific value in the lazy vector
+    /// 
+    /// If the index is out of range it returns `None`
+    pub fn get_lazy(&self, index: usize) -> Option<Alc<T>> {
         self.vec.get(index).cloned()
     }
 
@@ -58,98 +62,107 @@ impl<T: Clone> LazyVec<T> {
     /// - If it was modified and no one cloned it, it's O(1)
     /// - If it isn't cloned from other vector and no one cloned it, it's O(1)
     pub fn set(&mut self, index: usize, value: T) -> Result<(), ()>{
-        if self.is_mutable() {
+        let mut vec = if self.is_mutable() {
             // We can modify ourselves with no side effects
-            
-            let mut vec = unsafe { 
+            unsafe { 
                 mem::replace(
                     &mut self.vec,
-                    Lc::new(Vec::new()))
+                    Alc::new(Vec::new()))
                 .destroy() 
-            };
+            }
 
-            let res = match vec.get_mut(index) {
-                Some(elem) => {
-                    elem.write(value);
-                    Ok(())
-                },
-                None => Err(()),
-            };
-
-            // Put the modified vector back in the structure
-            self.vec = Lc::new(vec);
-
-            res
         } else {
             // We need to clone the vector so we don't mess with other clones
-            let mut vec = self.vec.take();
+            self.vec.take()
+        };
 
-            let res = match vec.get_mut(index) {
-                Some(elem) => {
-                    elem.write(value);
-                    Ok(())
-                },
-                None => Err(()),
-            };
-
-            // We need to mutate ourselves, to use the new modified vector, 
-            // and update our state to Mutable
-            self.vec = Lc::new(vec);
-
-            res
-        }
+        let res = match vec.get_mut(index) {
+            Some(elem) => {
+                elem.write(value);
+                Ok(())
+            },
+            None => Err(()),
+        };
+    
+        // Put the modified vector back in the structure
+        self.vec = Alc::new(vec);
+    
+        res
     }
 
     /// Pushes a new element at the end of the vector
     pub fn push(&mut self, value: T) {
-        if self.is_mutable() {
-            let mut vec = unsafe {
+        let mut vec = if self.is_mutable() {
+            unsafe {
                 mem::replace(
                     &mut self.vec, 
-                    Lc::new(Vec::new()))
+                    Alc::new(Vec::new()))
                     .destroy()
-            };
-
-            vec.push(Lc::new(value));
-
-            self.vec = Lc::new(vec);
+            }
         } else {
-            let mut vec = self.vec.take();
-            vec.push(Lc::new(value));
-            self.vec = Lc::new(vec);
-        }
+            self.vec.take()
+        };
+        
+        vec.push(Alc::new(value));
+        self.vec = Alc::new(vec);
     }
 
+    /// Pops an element at the end of the vector
+    pub fn pop(&mut self) -> Option<T> {
+        let mut vec = if self.is_mutable() {
+            unsafe {
+                mem::replace(
+                    &mut self.vec, 
+                    Alc::new(Vec::new()))
+                    .destroy()
+            }
+        } else {
+            self.vec.take()
+        };
+        
+        let res = vec.pop();
+        self.vec = Alc::new(vec);
+        res.map(Alc::unwrap)
+    }
+
+    #[inline(always)]
     /// Removes an element from the vector
     pub fn remove(&mut self, index: usize) -> T {
-        let mut vec = mem::replace(&mut self.vec, Lc::new(vec![])).unwrap();
+        self.remove_lazy(index).unwrap()
+    }
+
+    /// Removes an element from the vector and returns a lazy clone to it
+    pub fn remove_lazy(&mut self, index: usize) -> Alc<T> {
+        let mut vec = mem::replace(&mut self.vec, Alc::new(vec![])).unwrap();
         let res = vec.remove(index);
 
-        self.vec = Lc::new(vec);
+        self.vec = Alc::new(vec);
 
-        res.unwrap()
+        res
     }
 
     /// Inserts an element at a given position in a vector
     pub fn insert(&mut self, index: usize, value: T) {
-        let mut vec = mem::replace(&mut self.vec, Lc::new(vec![])).unwrap();
+        let mut vec = mem::replace(&mut self.vec, Alc::new(vec![])).unwrap();
         vec.insert(index, value.into());
 
-        self.vec = Lc::new(vec);
+        self.vec = Alc::new(vec);
     }
 
+    /// Produces an iterator over the elements
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         let vec = self.vec.read();
-        vec.iter().map(Lc::read)
+        vec.iter().map(Alc::read)
     }
 
+    /// Produces a mutable iterator
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         let vec = self.vec.read_mut();
-        vec.iter_mut().map(Lc::read_mut)
+        vec.iter_mut().map(Alc::read_mut)
     }
 }
 
-impl<T: Clone> LazyClone for LazyVec<T> {
+impl<T: Clone> LazyClone for AtomicLazyVec<T> {
     #[inline(always)]
     fn lazy(&self) -> Self {
         Self { 
@@ -170,40 +183,40 @@ impl<T: Clone> LazyClone for LazyVec<T> {
     }
 }
 
-impl<T: Clone> From<Vec<Lc<T>>> for LazyVec<T> {
-    fn from(value: Vec<Lc<T>>) -> Self {
+impl<T: Clone> From<Vec<Alc<T>>> for AtomicLazyVec<T> {
+    fn from(value: Vec<Alc<T>>) -> Self {
         Self { 
-            vec: Lc::new(value) 
+            vec: Alc::new(value) 
         }
     }
 }
 
-impl<T: Clone> From<Vec<T>> for LazyVec<T> {
+impl<T: Clone> From<Vec<T>> for AtomicLazyVec<T> {
     fn from(value: Vec<T>) -> Self {
         Self {
-            vec: Lc::new(value.into_iter()
-                .map(Lc::new)
+            vec: Alc::new(value.into_iter()
+                .map(Alc::new)
                 .collect()
             ),
         }
     }
 }
 
-impl<T: Clone> From<&[T]> for LazyVec<T> {
+impl<T: Clone> From<&[T]> for AtomicLazyVec<T> {
     fn from(value: &[T]) -> Self {
         value.to_vec().into()
     }
 }
 
-impl<T: Clone> Into<Vec<Lc<T>>> for LazyVec<T> {
-    fn into(self) -> Vec<Lc<T>> {
+impl<T: Clone> Into<Vec<Alc<T>>> for AtomicLazyVec<T> {
+    fn into(self) -> Vec<Alc<T>> {
         self.vec.unwrap()
             .into_iter()
             .collect()
     }
 }
 
-impl<T: Clone> Into<Vec<T>> for LazyVec<T> {
+impl<T: Clone> Into<Vec<T>> for AtomicLazyVec<T> {
     fn into(self) -> Vec<T> {
         self.vec.unwrap()
             .into_iter()
@@ -212,25 +225,25 @@ impl<T: Clone> Into<Vec<T>> for LazyVec<T> {
     }
 }
 
-impl<T: Clone> FromIterator<T> for LazyVec<T> {
+impl<T: Clone> FromIterator<T> for AtomicLazyVec<T> {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         Vec::from_iter(iter).into()
     }
 }
 
-impl<T: Clone> IntoIterator for LazyVec<T> {
+impl<T: Clone> IntoIterator for AtomicLazyVec<T> {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.vec.take()
             .into_iter()
-            .map(Lc::unwrap)
+            .map(Alc::unwrap)
             .collect::<Vec<T>>().into_iter()
     }
 }
 
-impl<T: Clone> Index<usize> for LazyVec<T> {
+impl<T: Clone> Index<usize> for AtomicLazyVec<T> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -238,7 +251,7 @@ impl<T: Clone> Index<usize> for LazyVec<T> {
     }
 }
 
-impl<T: Clone> IndexMut<usize> for LazyVec<T> {
+impl<T: Clone> IndexMut<usize> for AtomicLazyVec<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         self.get_mut(index).unwrap()
     }
@@ -250,11 +263,11 @@ mod tests {
 
     use crate::lazy::LazyClone;
 
-    use super::LazyVec;
+    use super::AtomicLazyVec;
 
     #[test]
     fn create() {
-        let mut lv = LazyVec::<Box<str>>::from(&["Hello".into(), "World".into(), "Take".into(), "a look at this".into()] as &[Box<str>]);
+        let mut lv = AtomicLazyVec::<Box<str>>::from(&["Hello".into(), "World".into(), "Take".into(), "a look at this".into()] as &[Box<str>]);
         let mut lv2 = lv.lazy();
         let mut lv3 = lv2.lazy();
 
@@ -273,7 +286,7 @@ mod tests {
     #[allow(unused_results)]
     #[allow(unused_must_use)]
     fn mutability_check() {
-        let mut lv = LazyVec::from(vec!["HI", "Goodbye", "Farwell", "Hello"]);
+        let mut lv = AtomicLazyVec::from(vec!["HI", "Goodbye", "Farwell", "Hello"]);
         let mut lv2 = lv.lazy();
         let mut lv3 = lv2.lazy();
         let mut lv4 = lv2.lazy();
@@ -293,7 +306,7 @@ mod tests {
 
     #[test]
     fn iterators() {
-        let lv = LazyVec::from([String::from("rust"), String::from("mojo"), String::from("zig"), String::from("carbon"),String::from("aura")].to_vec());
+        let lv = AtomicLazyVec::from([String::from("rust"), String::from("mojo"), String::from("zig"), String::from("carbon"),String::from("aura")].to_vec());
 
         lv.iter()
             .map(|elem| elem.to_uppercase())
@@ -311,7 +324,7 @@ mod tests {
     #[test]
     fn collecting() {
         let v = vec!["Hi", "my", "name", "is", "something"];
-        let lv: LazyVec<_> = v.into_iter()
+        let lv: AtomicLazyVec<_> = v.into_iter()
             .collect();
 
         dbg!(lv);

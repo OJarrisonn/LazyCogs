@@ -39,13 +39,17 @@ impl<T: Clone> LazyVec<T> {
     /// 
     /// If the index is out of range it returns `None`
     /// 
-    /// This operation is **always** O(1)
+    /// This operation is protected, it means, that the other clones aren't affected
     pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         let vec = self.vec.read_mut();
         
         vec.get_mut(index).map(Lc::read_mut)
     }
 
+    #[inline(always)]
+    /// Obtains a lazy clone to a specific value in the lazy vector
+    /// 
+    /// If the index is out of range it returns `None`
     pub fn get_lazy(&self, index: usize) -> Option<Lc<T>> {
         self.vec.get(index).cloned()
     }
@@ -58,76 +62,83 @@ impl<T: Clone> LazyVec<T> {
     /// - If it was modified and no one cloned it, it's O(1)
     /// - If it isn't cloned from other vector and no one cloned it, it's O(1)
     pub fn set(&mut self, index: usize, value: T) -> Result<(), ()>{
-        if self.is_mutable() {
+        let mut vec = if self.is_mutable() {
             // We can modify ourselves with no side effects
-            
-            let mut vec = unsafe { 
+            unsafe { 
                 mem::replace(
                     &mut self.vec,
                     Lc::new(Vec::new()))
                 .destroy() 
-            };
+            }
 
-            let res = match vec.get_mut(index) {
-                Some(elem) => {
-                    elem.write(value);
-                    Ok(())
-                },
-                None => Err(()),
-            };
-
-            // Put the modified vector back in the structure
-            self.vec = Lc::new(vec);
-
-            res
         } else {
             // We need to clone the vector so we don't mess with other clones
-            let mut vec = self.vec.take();
+            self.vec.take()
+        };
 
-            let res = match vec.get_mut(index) {
-                Some(elem) => {
-                    elem.write(value);
-                    Ok(())
-                },
-                None => Err(()),
-            };
-
-            // We need to mutate ourselves, to use the new modified vector, 
-            // and update our state to Mutable
-            self.vec = Lc::new(vec);
-
-            res
-        }
+        let res = match vec.get_mut(index) {
+            Some(elem) => {
+                elem.write(value);
+                Ok(())
+            },
+            None => Err(()),
+        };
+    
+        // Put the modified vector back in the structure
+        self.vec = Lc::new(vec);
+    
+        res
     }
 
     /// Pushes a new element at the end of the vector
     pub fn push(&mut self, value: T) {
-        if self.is_mutable() {
-            let mut vec = unsafe {
+        let mut vec = if self.is_mutable() {
+            unsafe {
                 mem::replace(
                     &mut self.vec, 
                     Lc::new(Vec::new()))
                     .destroy()
-            };
-
-            vec.push(Lc::new(value));
-
-            self.vec = Lc::new(vec);
+            }
         } else {
-            let mut vec = self.vec.take();
-            vec.push(Lc::new(value));
-            self.vec = Lc::new(vec);
-        }
+            self.vec.take()
+        };
+        
+        vec.push(Lc::new(value));
+        self.vec = Lc::new(vec);
     }
 
+    /// Pops an element at the end of the vector
+    pub fn pop(&mut self) -> Option<T> {
+        let mut vec = if self.is_mutable() {
+            unsafe {
+                mem::replace(
+                    &mut self.vec, 
+                    Lc::new(Vec::new()))
+                    .destroy()
+            }
+        } else {
+            self.vec.take()
+        };
+        
+        let res = vec.pop();
+        self.vec = Lc::new(vec);
+        res.map(Lc::unwrap)
+    }
+
+    #[inline(always)]
     /// Removes an element from the vector
     pub fn remove(&mut self, index: usize) -> T {
+        self.remove_lazy(index).unwrap()
+    }
+
+    /// Removes an element from the vector and returns a lazy clone to it
+    pub fn remove_lazy(&mut self, index: usize) -> Lc<T> {
         let mut vec = mem::replace(&mut self.vec, Lc::new(vec![])).unwrap();
         let res = vec.remove(index);
 
         self.vec = Lc::new(vec);
 
-        res.unwrap()
+        res
     }
 
     /// Inserts an element at a given position in a vector
@@ -138,11 +149,13 @@ impl<T: Clone> LazyVec<T> {
         self.vec = Lc::new(vec);
     }
 
+    /// Produces an iterator over the elements
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         let vec = self.vec.read();
         vec.iter().map(Lc::read)
     }
 
+    /// Produces a mutable iterator
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         let vec = self.vec.read_mut();
         vec.iter_mut().map(Lc::read_mut)

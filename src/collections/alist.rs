@@ -3,7 +3,11 @@ use std::{collections::LinkedList, mem};
 use crate::{lazy::LazyClone, alc::Alc};
 
 #[derive(Debug)]
-
+/// lazy-cogs implementation of a AtomicLinkedList. Similar to LazyList but thread-safe. 
+/// It's a collection meant to be used when you need to work with the whole data, not it's elements
+/// 
+/// Cloning a AtomicLazyList is always O(1). Modifing or getting piecies of data is O(n). 
+/// Actually, pushing and popping into/from the front or back of the list may be O(1) is the list is mutable
 pub struct AtomicLazyList<T: Clone> { 
     list: Alc<LinkedList<Alc<T>>>,
 }
@@ -44,87 +48,126 @@ impl<T: Clone> AtomicLazyList<T> {
     }
 
     /// Changes the value at a given position of the list
+    ///
+    /// Returns Ok(()) if the index is in-bounds and Err(()) if not
     pub fn set(&mut self, index: usize, value: T) -> Result<(), ()>{
-        if self.is_mutable() {
+        let mut list = if self.is_mutable() {
             // We can modify ourselves with no side effects
             
-            let mut list = unsafe { 
+            unsafe { 
                 mem::replace(
                     &mut self.list,
                     Alc::new(LinkedList::new()))
                 .destroy() 
-            };
-
-            let res = match list.iter_mut().nth(index) {
-                Some(elem) => {
-                    elem.write(value);
-                    Ok(())
-                },
-                None => Err(()),
-            };
-
-            // Put the modified vector back in the structure
-            self.list = Alc::new(list);
-
-            res
+            }
         } else {
             // We need to clone the vector so we don't mess with other clones
-            let mut list = self.list.take();
+            self.list.take()
+        };
 
-            let res = match list.iter_mut().nth(index) {
-                Some(elem) => {
-                    elem.write(value);
-                    Ok(())
-                },
-                None => Err(()),
-            };
+        let res = match list.iter_mut().nth(index) {
+            Some(elem) => {
+                elem.write(value);
+                Ok(())
+            },
+            None => Err(()),
+        };
 
-            // We need to mutate ourselves, to use the new modified vector, 
-            // and update our state to Mutable
-            self.list = Alc::new(list);
+        // We need to mutate ourselves, to use the new modified vector, 
+        // and update our state to Mutable
+        self.list = Alc::new(list);
 
-            res
-        }
+        res
     }
 
     /// Pushes a new element at the end of the list
     pub fn push_back(&mut self, value: T) {
-        if self.is_mutable() {
-            let mut list = unsafe {
+        let mut list = if self.is_mutable() {
+            unsafe {
                 mem::replace(
                     &mut self.list, 
                     Alc::new(LinkedList::new()))
                     .destroy()
-            };
-
-            list.push_back(Alc::new(value));
-
-            self.list = Alc::new(list);
+            }
         } else {
-            let mut list = self.list.take();
-            list.push_back(Alc::new(value));
-            self.list = Alc::new(list);
-        }
+            self.list.take()
+        };
+
+        list.push_back(Alc::new(value));
+
+        self.list = Alc::new(list);
     }
 
     /// Pushes a new element at the beginning of the list
     pub fn push_front(&mut self, value: T) {
-        if self.is_mutable() {
-            let mut list = unsafe {
+        let mut list = if self.is_mutable() {
+            unsafe {
                 mem::replace(
                     &mut self.list, 
                     Alc::new(LinkedList::new()))
                     .destroy()
-            };
+            }
 
-            list.push_front(Alc::new(value));
-
-            self.list = Alc::new(list);
         } else {
-            let mut list = self.list.take();
-            list.push_front(Alc::new(value));
-            self.list = Alc::new(list);
-        }
+            self.list.take()
+        };
+
+        list.push_front(Alc::new(value));
+
+        self.list = Alc::new(list);
+
+    }
+
+    /// Pops an element from the end of the list and returns the lazy clone to the value
+    pub fn pop_back_lazy(&mut self) -> Option<Alc<T>> {
+        let mut list = if self.is_mutable() {
+            unsafe {
+                mem::replace(
+                    &mut self.list, 
+                    Alc::new(LinkedList::new()))
+                    .destroy()
+            }
+        } else {
+            self.list.take()
+        };
+
+        let res = list.pop_back();
+
+        self.list = Alc::new(list);
+
+        res
+    }
+
+    /// Pops an element from the beginning of the list and returns the lazy clone to the value
+    pub fn pop_front_lazy(&mut self) -> Option<Alc<T>> {
+        let mut list = if self.is_mutable() {
+            unsafe {
+                mem::replace(
+                    &mut self.list, 
+                    Alc::new(LinkedList::new()))
+                    .destroy()
+            }
+        } else {
+            self.list.take()
+        };
+
+        let res = list.pop_front();
+
+        self.list = Alc::new(list);
+
+        res
+    }
+
+    #[inline(always)]
+    /// Pops an element from the end of the list and returns the lazy clone to the value
+    pub fn pop_back(&mut self) -> Option<T> {
+        self.pop_back_lazy().map(Alc::unwrap)
+    }
+
+    #[inline(always)]
+    /// Pops an element from the beginning of the list and returns the lazy clone to the value
+    pub fn pop_front(&mut self) -> Option<T> {
+        self.pop_front_lazy().map(Alc::unwrap)
     }
 
     #[inline(always)]
@@ -180,12 +223,14 @@ impl<T: Clone> AtomicLazyList<T> {
     }
 
     #[inline(always)]
+    /// Produces an iterator over the elements of the list
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         let list = self.list.read();
         list.iter().map(Alc::read)
     }
 
     #[inline(always)]
+    /// Produces a mutable iterator over the elements of the list
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         let list = self.list.read_mut();
         list.iter_mut().map(Alc::read_mut)
@@ -294,7 +339,7 @@ impl<T: Clone> IntoIterator for AtomicLazyList<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{iter::zip, thread};
+    use std::iter::zip;
 
     use crate::lazy::LazyClone;
 
@@ -363,26 +408,5 @@ mod tests {
             .collect();
 
         dbg!(lv);
-    }
-
-    #[test]
-    fn safety() {
-        let l = AtomicLazyList::from(vec!["Hi".to_string(), "I love".to_string(), "grapes".to_string()]);
-        let mut l_clone = l.lazy();
-        
-
-        let h2 = thread::spawn(move || 
-            l_clone.iter_mut()
-                .for_each(|elem| {
-                    *elem = elem.to_ascii_uppercase();
-                    println!("{}", elem);
-                }));
-
-        let h = thread::spawn(move|| 
-            l.iter()
-                .for_each(|elem| println!("{}", elem)));
-                
-        let _ = h2.join();
-        let _ = h.join();
     }
 }

@@ -12,7 +12,7 @@ Reference counting. Instead of calling real `Clone::clone`, Lazy Cogs does `Rc::
 
 ## Immutable means I can't change the data?
 
-No. Immutable means that it's most likely to not be mutated. But in fact you can mutate the data. When data is mutated actual `Clone::clone`s are done.
+No. Immutable means that it's most likely to not be mutated. But in fact you can mutate the data. When data is mutated actual `Clone::clone`s are done. In our builtin implementations, we make sure that every attempt to mutate data doesn't affect any other clone.
 
 That's the beautiful of laziness. Why should I take a huge amount of time cloning data that could be cheap references? I'll only clone when absolutely needed.
 
@@ -35,4 +35,4 @@ The trait is implemented by `Lc`and `Alc`.
 
 ## Collections
 
-Lazy Cogs also provides some out-of-the-box lazy implementations of collections. At the moment just `LazyVec` and `LazyList` (both with `Atomic` variants) which are respectively implementations of a `Vec` and a `LinkedList`.
+Lazy Cogs also provides some out-of-the-box lazy implementations of collections. At the moment just `LazyVec` and `LazyList` (both with `Atomic` variants) which are respectively implementations of a `Vec` and a `LinkedList`. They aren't simple wrappers, they have some internal logic that makes them lazy.

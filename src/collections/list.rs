@@ -3,7 +3,11 @@ use std::{collections::LinkedList, mem};
 use crate::{lazy::LazyClone, lc::Lc};
 
 #[derive(Debug)]
-
+/// lazy-cogs implementation of a LinkedList. 
+/// It's a collection meant to be used when you need to work with the whole data, not it's elements
+/// 
+/// Cloning a LazyList is always O(1). Modifing or getting piecies of data is O(n). 
+/// Actually, pushing and popping into/from the front or back of the list may be O(1) is the list is mutable
 pub struct LazyList<T: Clone> { 
     list: Lc<LinkedList<Lc<T>>>,
 }
@@ -44,87 +48,126 @@ impl<T: Clone> LazyList<T> {
     }
 
     /// Changes the value at a given position of the list
+    ///
+    /// Returns Ok(()) if the index is in-bounds and Err(()) if not
     pub fn set(&mut self, index: usize, value: T) -> Result<(), ()>{
-        if self.is_mutable() {
+        let mut list = if self.is_mutable() {
             // We can modify ourselves with no side effects
             
-            let mut list = unsafe { 
+            unsafe { 
                 mem::replace(
                     &mut self.list,
                     Lc::new(LinkedList::new()))
                 .destroy() 
-            };
-
-            let res = match list.iter_mut().nth(index) {
-                Some(elem) => {
-                    elem.write(value);
-                    Ok(())
-                },
-                None => Err(()),
-            };
-
-            // Put the modified vector back in the structure
-            self.list = Lc::new(list);
-
-            res
+            }
         } else {
             // We need to clone the vector so we don't mess with other clones
-            let mut list = self.list.take();
+            self.list.take()
+        };
 
-            let res = match list.iter_mut().nth(index) {
-                Some(elem) => {
-                    elem.write(value);
-                    Ok(())
-                },
-                None => Err(()),
-            };
+        let res = match list.iter_mut().nth(index) {
+            Some(elem) => {
+                elem.write(value);
+                Ok(())
+            },
+            None => Err(()),
+        };
 
-            // We need to mutate ourselves, to use the new modified vector, 
-            // and update our state to Mutable
-            self.list = Lc::new(list);
+        // We need to mutate ourselves, to use the new modified vector, 
+        // and update our state to Mutable
+        self.list = Lc::new(list);
 
-            res
-        }
+        res
     }
 
     /// Pushes a new element at the end of the list
     pub fn push_back(&mut self, value: T) {
-        if self.is_mutable() {
-            let mut list = unsafe {
+        let mut list = if self.is_mutable() {
+            unsafe {
                 mem::replace(
                     &mut self.list, 
                     Lc::new(LinkedList::new()))
                     .destroy()
-            };
-
-            list.push_back(Lc::new(value));
-
-            self.list = Lc::new(list);
+            }
         } else {
-            let mut list = self.list.take();
-            list.push_back(Lc::new(value));
-            self.list = Lc::new(list);
-        }
+            self.list.take()
+        };
+
+        list.push_back(Lc::new(value));
+
+        self.list = Lc::new(list);
     }
 
     /// Pushes a new element at the beginning of the list
     pub fn push_front(&mut self, value: T) {
-        if self.is_mutable() {
-            let mut list = unsafe {
+        let mut list = if self.is_mutable() {
+            unsafe {
                 mem::replace(
                     &mut self.list, 
                     Lc::new(LinkedList::new()))
                     .destroy()
-            };
+            }
 
-            list.push_front(Lc::new(value));
-
-            self.list = Lc::new(list);
         } else {
-            let mut list = self.list.take();
-            list.push_front(Lc::new(value));
-            self.list = Lc::new(list);
-        }
+            self.list.take()
+        };
+
+        list.push_front(Lc::new(value));
+
+        self.list = Lc::new(list);
+
+    }
+
+    /// Pops an element from the end of the list and returns the lazy clone to the value
+    pub fn pop_back_lazy(&mut self) -> Option<Lc<T>> {
+        let mut list = if self.is_mutable() {
+            unsafe {
+                mem::replace(
+                    &mut self.list, 
+                    Lc::new(LinkedList::new()))
+                    .destroy()
+            }
+        } else {
+            self.list.take()
+        };
+
+        let res = list.pop_back();
+
+        self.list = Lc::new(list);
+
+        res
+    }
+
+    /// Pops an element from the beginning of the list and returns the lazy clone to the value
+    pub fn pop_front_lazy(&mut self) -> Option<Lc<T>> {
+        let mut list = if self.is_mutable() {
+            unsafe {
+                mem::replace(
+                    &mut self.list, 
+                    Lc::new(LinkedList::new()))
+                    .destroy()
+            }
+        } else {
+            self.list.take()
+        };
+
+        let res = list.pop_front();
+
+        self.list = Lc::new(list);
+
+        res
+    }
+
+    #[inline(always)]
+    /// Pops an element from the end of the list and returns the lazy clone to the value
+    pub fn pop_back(&mut self) -> Option<T> {
+        self.pop_back_lazy().map(Lc::unwrap)
+    }
+
+    #[inline(always)]
+    /// Pops an element from the beginning of the list and returns the lazy clone to the value
+    pub fn pop_front(&mut self) -> Option<T> {
+        self.pop_front_lazy().map(Lc::unwrap)
     }
 
     #[inline(always)]
@@ -180,12 +223,14 @@ impl<T: Clone> LazyList<T> {
     }
 
     #[inline(always)]
+    /// Produces an iterator over the elements of the list
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         let list = self.list.read();
         list.iter().map(Lc::read)
     }
 
     #[inline(always)]
+    /// Produces a mutable iterator over the elements of the list
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         let list = self.list.read_mut();
         list.iter_mut().map(Lc::read_mut)

@@ -71,7 +71,7 @@ impl<T: Clone> Alc<T> {
             .expect("Destroyed a lazy clone that was being shared, this is invalid.")
     }
 
-    /// Unwraps the lazy clone and returns the inner data in O(1) if the Alc is mutable, otherwise performes an clone.
+    /// Unwraps the lazy clone and returns the inner data in O(1) if the Alc is mutable, otherwise performs a clone.
     pub fn unwrap(self) -> T {
         if self.is_mutable() { 
             unsafe { self.destroy() } 

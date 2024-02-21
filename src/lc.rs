@@ -16,7 +16,7 @@ impl<T: Clone> Lc<T> {
     }
 
     #[inline(always)]
-    /// Returns a reference of the lazy cloned value
+    /// Returns a reference to the lazy cloned value
     pub fn read(&self) -> &T {
         &self.0
     }
@@ -88,6 +88,7 @@ impl<T: Clone> Deref for Lc<T> {
 }
 
 impl<T: Clone> DerefMut for Lc<T> {
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.read_mut()
     }
