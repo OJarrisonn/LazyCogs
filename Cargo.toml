@@ -1,6 +1,6 @@
 [package]
 name = "lazy-cogs"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Jorge Harrisonn <j.h.m.t.v.10@gmail.com>"]
 description = "Lazy Cogs is a implementation of lazy clonable data structures"
